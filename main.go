@@ -1,21 +1,22 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
 	"time"
 
-	"github.com/jackc/pgx"
-) 
+	"github.com/google/uuid"
+	_ "github.com/lib/pq"
+)
 
 var baseSvr = "xxxx"
 var secretsauce = "xxxx"
@@ -33,6 +34,17 @@ type User struct {
 	Name string `json:"name"`
 	Age  int    `json:"age"`
 	City string `json:"city"`
+}
+
+type UserCredentials struct {
+	ID int 
+	Name string
+	Email string
+	Email_verified_at string
+	Password string
+	Remember_token string 
+	Created_at string
+	Updated_at string
 }
 
 type student struct {
@@ -54,9 +66,15 @@ type changelogResponse struct {
 	Data    []changelog `json:"data"`
 }
 
+type pdfCompress struct {
+	Filename string
+	Filesize string
+	CompMethod string 
+}
+
 func main() {
 	runtime.GOMAXPROCS(2) // Set jumlah goroutine yang berjalan bersamaan
-	dbTest()
+	sqlExec()
 }
 
 func array() {
@@ -331,26 +349,128 @@ func callHttpRequestLearn() {
 	}
 }
 
-func dbTest() {
-	connConfig, err := pgx.ParseURI(databaseUrl)
+func sqlConnect() (*sql.DB, error) {
+	db, err := sql.Open("postgres", databaseUrl)
 	if err != nil {
-		fmt.Println("Error parsing database URL:", err)
+		return nil, err
+	}
+
+	return db, nil
+}
+
+func sqlQuery() {
+	db, err := sqlConnect()
+	if err != nil {
+		fmt.Println("Error connection: ", err)
+		return
+	}
+	defer db.Close()
+
+	var userName string = "eureka"
+	rows, err := db.Query("select name, email, created_at from users where name = $1", userName)
+	if err != nil {
+		fmt.Println("Error Query: ", err)
+		return
+	}
+	defer rows.Close()
+
+	var result []UserCredentials
+
+	for rows.Next() {
+		var each = UserCredentials{}
+		var err = rows.Scan(&each.Name, &each.Email, &each.Created_at)
+		if err != nil {
+			fmt.Println(err.Error())
+			return
+		}
+
+		result = append(result, each)
+	}
+
+	if err = rows.Err(); err != nil {
+		fmt.Println(err.Error())
 		return
 	}
 
-	conn, err := pgx.Connect(connConfig)
+	for _, each := range result {
+		fmt.Println(each.Name)
+		fmt.Println(each.Email)
+		fmt.Println(each.Created_at)
+	}
+}
+
+func sqlQueryRow() {
+	var db, err = sqlConnect()
 	if err != nil {
-		fmt.Println("Error connecting to database:", err)
+		fmt.Println("Error koneksi ke database: ", err)
 		return
 	}
-	defer conn.Close()
+	defer db.Close()
 
-	var username, password string
-	err = conn.QueryRow("select name, password from users").Scan(&username, &password)
+	var result = pdfCompress{}
+	var fileName string = "1._Cover.pdf"
+	err = db.QueryRow(`select "fileName", "fileSize", "compMethod" from "pdfCompress" where "fileName" = $1`, fileName).Scan(&result.Filename, &result.Filesize, &result.CompMethod)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Query Row Failed: %v\n", err)
-		os.Exit(1)
+		fmt.Println("Error queryrow: ", err)
+		return
+	}
+	fmt.Printf("Filename: %s\n Filesize: %s\n Compression Method: %v\n", result.Filename, result.Filesize, result.CompMethod)
+}
+
+func sqlPrepare() {
+	db, err := sqlConnect()
+	if err != nil {
+		fmt.Println("Error koneksi ke database: ", err)
+		return 
+	}
+	defer db.Close()
+
+	prp, err := db.Prepare(`select "fileName", "fileSize", "compMethod" from "pdfCompress" where "fileName" = $1`)
+	if err != nil {
+		fmt.Println("Prepare error: ", err)
+		return
 	}
 
-	fmt.Println(username, password)
+	var result = pdfCompress{}
+	prp.QueryRow("Ebook_Panduan_ClearOS_6_by_Andimicro.pdf").Scan(&result.Filename, &result.Filesize, &result.CompMethod)
+	fmt.Printf("Filename: %s\n Filesize: %s\n Compression Method: %v\n", result.Filename, result.Filesize, result.CompMethod)
+
+	var result2 = pdfCompress{}
+	prp.QueryRow("estatement_04012024.pdf").Scan(&result2.Filename, &result2.Filesize, &result2.CompMethod)
+	fmt.Printf("Filename: %s\n Filesize: %s\n Compression Method: %v\n", result2.Filename, result2.Filesize, result2.CompMethod)
+
+	var result3 = pdfCompress{}
+	prp.QueryRow("pdfWatermark_bcae1fbc.pdf").Scan(&result3.Filename, &result3.Filesize, &result3.CompMethod)
+	fmt.Printf("Filename: %s\n Filesize: %s\n Compression Method: %v\n", result3.Filename, result3.Filesize, result3.CompMethod)
+}
+
+func sqlExec() {
+	db, err := sqlConnect()
+	if err != nil {
+		fmt.Println("Error koneksi ke database: ", err)
+		return 
+	}
+	defer db.Close()
+
+	GUID := uuid.New()
+	_, err = db.Exec("insert into sessions values ($1, $2, $3, $4, $5, $6)", GUID, nil, "10.0.0.1", "MyGoClient/1.0", "GOLANG", "1752985976")
+	if err != nil {
+		fmt.Println("Exec error: ", err)
+		return
+	}
+	fmt.Println("Insert berhasil gan, hehe")
+
+	_, err = db.Exec("update sessions set ip_address = $1 where id = $2", "10.0.0.2", GUID)
+	if err != nil {
+		fmt.Println("Exec error: ", err)
+		return
+	}
+	fmt.Println("Update berhasil gan, hehe")
+
+	_, err = db.Exec("delete from sessions where ip_address = $1", "10.0.0.2")
+	if err != nil {
+		fmt.Println("Exec error: ", err)
+		return
+	}
+	fmt.Println("Delete berhasil gan, hehe")
 }
